@@ -148,9 +148,11 @@ export function replyRecipients(o: Record<string, unknown>, all: boolean, own: s
     });
   const replyTo = addresses(o.replyTo);
   const to = keep(replyTo.length ? replyTo : addresses(o.from));
-  const cc = all ? keep([...addresses(o.to), ...addresses(o.cc)]) : [];
-  // A reply to your own message goes to its other recipients.
-  return to.length ? { cc, to } : { cc: cc.slice(1), to: cc.slice(0, 1) };
+  if (to.length) {
+    return { cc: all ? keep([...addresses(o.to), ...addresses(o.cc)]) : [], to };
+  }
+  // A reply to your own message goes to its To; --all adds its Cc.
+  return { to: keep(addresses(o.to)), cc: all ? keep(addresses(o.cc)) : [] };
 }
 const quote = (text: string) =>
   text

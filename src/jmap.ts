@@ -21,7 +21,7 @@ interface Session {
 }
 const READ_RETRIES = 4;
 /** Codes the ward-access proxy answers with; anything else from upstream is jmap_error. */
-const GATE = ["approval_required", "content_changed", "refused", "busy", "outcome_unknown"];
+const GATE = ["approval_required", "content_changed", "refused", "busy", "outcome_unknown", "credential_in_content"];
 
 function failure(status: number, body: unknown): CliError {
   const b = body as { error?: { code?: unknown; message?: unknown }; type?: unknown; detail?: unknown } | null;

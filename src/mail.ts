@@ -160,6 +160,7 @@ export async function threadsRead(jmap: Jmap, parsed: Parsed): Promise<Output> {
       {
         "#ids": { name: "Thread/get", path: "/list/*/emailIds", resultOf: "t" },
         accountId,
+        fetchHTMLBodyValues: true,
         fetchTextBodyValues: true,
         properties: [...LIST_FIELDS, "to", "cc", "textBody", "htmlBody", "bodyValues"],
       },

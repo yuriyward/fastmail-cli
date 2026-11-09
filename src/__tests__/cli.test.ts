@@ -112,6 +112,11 @@ describe("reads", () => {
     expect(get?.[1]).toMatchObject({ fetchHTMLBodyValues: true, fetchTextBodyValues: true, ids: ["m1"] });
     expect(f.api().length).toBe(1);
   });
+  test("threads read fetches HTML values, so an HTML-only message keeps its body", async () => {
+    const f = fake({ "Email/get": (a, c) => ["Email/get", { list: [{ bodyValues: a.fetchHTMLBodyValues ? { h: { value: "<p>only html</p>" } } : {}, htmlBody: [{ partId: "h", type: "text/html" }], id: "e1", textBody: [] }] }, c[2]] });
+    const r = await run(["threads", "read", "--id", "t1", "--json"], f.deps);
+    expect(JSON.parse(r.stdout).messages[0].body).toBe("<p>only html</p>");
+  });
   test("threads read chains Thread/get to Email/get", async () => {
     const f = fake({ "Email/get": (_a, c) => ["Email/get", { list: [{ id: "e1", subject: "s" }] }, c[2]] });
     const r = await run(["threads", "read", "--id", "t1", "--json"], f.deps);
@@ -179,10 +184,15 @@ describe("drafts", () => {
     });
     expect((email?.bodyValues as { text: { value: string } }).text.value).toContain("> line two");
   });
+  test("a reply to the owner's own sent message goes to its To, without --all", () => {
+    const sent = { cc: [{ email: "cc@example.org" }], from: [{ email: "me@example.com" }], to: [{ email: "you@example.org" }] };
+    expect(replyRecipients(sent, false, ["me@example.com"])).toEqual({ cc: [], to: [{ email: "you@example.org" }] });
+    expect(replyRecipients(sent, true, ["me@example.com"])).toEqual({ cc: [{ email: "cc@example.org" }], to: [{ email: "you@example.org" }] });
+  });
   test("reply recipients fall back to From and drop the owner's addresses", () => {
     expect(replyRecipients({ from: [{ email: "bob@example.org" }] }, false, ["me@example.com"])).toEqual({ cc: [], to: [{ email: "bob@example.org" }] });
-    expect(replyRecipients({ from: [{ email: "me@example.com" }], to: [{ email: "x@example.org" }, { email: "y@example.org" }] }, true, ["ME@example.com"])).toEqual({
-      cc: [{ email: "y@example.org" }],
+    expect(replyRecipients({ from: [{ email: "me@example.com" }], to: [{ email: "x@example.org" }, { email: "ME@example.com" }] }, true, ["ME@example.com"])).toEqual({
+      cc: [],
       to: [{ email: "x@example.org" }],
     });
   });
