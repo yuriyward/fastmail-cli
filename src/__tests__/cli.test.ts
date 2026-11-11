@@ -138,6 +138,59 @@ describe("reads", () => {
 });
 
 describe("drafts", () => {
+  for (const command of ["create", "reply", "forward"]) {
+    for (const withHtml of [false, true]) {
+      for (const originalHasHtml of command === "create" ? [false] : [false, true]) {
+        test(`${command}: HTML=${withHtml}, original HTML=${originalHasHtml}`, async () => {
+          const original = {
+            from: [{ email: "bob@example.org", name: "Bob <B>" }],
+            to: [{ email: "owner@example.com" }],
+            subject: "A <plan>",
+            textBody: [{ partId: "plain" }],
+            htmlBody: originalHasHtml ? [{ partId: "rich" }] : [],
+            bodyValues: { plain: { value: "original <text>\nsecond line" }, rich: { value: "<p>Original <b>HTML</b></p>" } },
+            attachments: [{ blobId: "original-blob", name: "original.txt", type: "text/plain" }],
+          };
+          const f = fake({ "Email/get": (_a, c) => ["Email/get", { list: [original] }, c[2]] });
+          const html = '<p style="font-family: sans-serif">Hello & welcome</p>';
+          f.deps.readFile = async (path) => new TextEncoder().encode(path === "body.html" ? html : "Hello");
+          const args = command === "create" ? ["--to", "bob@example.org", "--subject", "s"]
+            : command === "reply" ? ["--id", "m1"] : ["--id", "m1", "--to", "carol@example.org"];
+          const result = await run(["drafts", command, ...args, "--body-file", "body.txt", ...(withHtml ? ["--body-html-file", "body.html"] : [])], f.deps);
+          expect(result.exitCode).toBe(0);
+          const email = (f.api().at(-1)?.methodCalls[0]?.[1].create as Record<string, Record<string, unknown>>).draft!;
+          const values = email.bodyValues as Record<string, { value: string }>;
+          expect(email.textBody).toEqual([{ partId: "text", type: "text/plain" }]);
+          expect(values.text?.value).toBe(command === "create" ? "Hello" : command === "reply"
+            ? "Hello\n\nOn an earlier date, Bob <B> <bob@example.org> wrote:\n> original <text>\n> second line\n"
+            : "Hello\n\n---------- Forwarded message ----------\nFrom: Bob <B> <bob@example.org>\nDate: \nSubject: A <plan>\nTo: owner@example.com\n\noriginal <text>\nsecond line\n");
+          if (withHtml) {
+            expect(email.htmlBody).toEqual([{ partId: "html", type: "text/html" }]);
+            expect(values.html?.value.startsWith(html)).toBe(true);
+            if (command !== "create") {
+              expect(values.html?.value).toContain(`<blockquote>${originalHasHtml ? "<p>Original <b>HTML</b></p>" : "original &lt;text&gt;<br>\nsecond line"}</blockquote>`);
+              expect(values.html?.value).toContain("Bob &lt;B&gt;");
+            } else expect(values.html?.value).toBe(html);
+          } else {
+            expect(email.htmlBody).toBeUndefined();
+            expect(values.html).toBeUndefined();
+          }
+          if (command === "forward") expect(email.attachments).toEqual([{ blobId: "original-blob", name: "original.txt", type: "text/plain", disposition: "attachment" }]);
+        });
+      }
+    }
+    test(`${command}: HTML file size boundary`, async () => {
+      for (const size of [1024 * 1024, 1024 * 1024 + 1]) {
+        const f = fake({ "Email/get": (_a, c) => ["Email/get", { list: [{ from: [{ email: "bob@example.org" }] }] }, c[2]] });
+        f.deps.readFile = async () => new Uint8Array(size).fill(120);
+        const args = command === "create" ? ["--to", "bob@example.org", "--subject", "s"]
+          : command === "reply" ? ["--id", "m1"] : ["--id", "m1", "--to", "carol@example.org"];
+        const result = await run(["drafts", command, ...args, "--body-file", "body.txt", "--body-html-file", "body.html"], f.deps);
+        expect(result.exitCode).toBe(size === 1024 * 1024 ? 0 : 2);
+        if (size > 1024 * 1024) expect(f.api().some((r) => r.methodCalls.some((c) => c[0] === "Email/set"))).toBe(false);
+      }
+    });
+  }
   test("create uploads attachments and creates one email in Drafts with $draft", async () => {
     const f = fake();
     const r = await run(["drafts", "create", "--to", "bob@example.org", "--subject", "s", "--body-file", "b.txt", "--attach", "notes.txt", "--json"], f.deps);

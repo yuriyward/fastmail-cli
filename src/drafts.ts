@@ -24,6 +24,13 @@ const recipients = (parsed: Parsed, name: string): EmailAddress[] => (parsed.fla
 async function bodyFile(files: Files, parsed: Parsed) {
   return new TextDecoder("utf-8", { fatal: true }).decode(await files.read(one(parsed, "body-file", true)));
 }
+async function htmlFile(files: Files, parsed: Parsed): Promise<string | undefined> {
+  const path = one(parsed, "body-html-file");
+  if (path === undefined) return undefined;
+  const bytes = await files.read(path);
+  if (bytes.length > 1024 * 1024) throw usage(`${path} is over 1 MB`);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
 async function uploads(jmap: Jmap, files: Files, parsed: Parsed): Promise<Part[]> {
   const read: { path: string; bytes: Uint8Array }[] = [];
   for (const path of parsed.flags.get("attach") ?? []) {
@@ -63,6 +70,7 @@ interface Draft {
   bcc?: EmailAddress[];
   subject: string;
   text: string;
+  html?: string | undefined;
   attachments: Part[];
   inReplyTo?: string[] | null;
   references?: string[] | null;
@@ -74,7 +82,8 @@ async function create(jmap: Jmap, d: Draft): Promise<Output> {
   const email: Record<string, unknown> = {
     attachments: d.attachments,
     bcc: d.bcc?.length ? d.bcc : null,
-    bodyValues: { text: { value: d.text } },
+    bodyValues: { text: { value: d.text }, ...(d.html !== undefined ? { html: { value: d.html } } : {}) },
+    ...(d.html !== undefined ? { htmlBody: [{ partId: "html", type: "text/html" }] } : {}),
     cc: d.cc?.length ? d.cc : null,
     from: [d.from],
     keywords: { $draft: true, $seen: true },
@@ -98,17 +107,18 @@ async function create(jmap: Jmap, d: Draft): Promise<Output> {
   };
 }
 export async function draftsCreate(jmap: Jmap, files: Files, parsed: Parsed): Promise<Output> {
-  allowOnly(parsed, ["to", "cc", "bcc", "subject", "body-file", "attach"]);
+  allowOnly(parsed, ["to", "cc", "bcc", "subject", "body-file", "body-html-file", "attach"]);
   const to = recipients(parsed, "to");
   if (!to.length) {
     throw usage("--to is required (one exact address per --to)");
   }
   const subject = one(parsed, "subject", true);
   const text = await bodyFile(files, parsed);
+  const html = await htmlFile(files, parsed);
   const { username } = await jmap.connect();
   const from = sender(await identities(jmap), username);
   const attachments = await uploads(jmap, files, parsed);
-  return create(jmap, { attachments, bcc: recipients(parsed, "bcc"), cc: recipients(parsed, "cc"), from, subject, text, to });
+  return create(jmap, { attachments, bcc: recipients(parsed, "bcc"), cc: recipients(parsed, "cc"), from, subject, text, html, to });
 }
 const ORIGINAL = ["id", "messageId", "references", "subject", "from", "replyTo", "to", "cc", "sentAt", "receivedAt", "textBody", "htmlBody", "bodyValues", "attachments"];
 async function original(jmap: Jmap, message: string) {
@@ -159,10 +169,19 @@ const quote = (text: string) =>
     .split("\n")
     .map((l) => `> ${l}`)
     .join("\n");
+/** Escape generated text only; supplied HTML and the original HTML remain intact. */
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const textHtml = (text: string) => escapeHtml(text).replace(/\n/g, "<br>\n");
+function originalHtml(o: Record<string, unknown>): string {
+  const values = (o.bodyValues ?? {}) as Record<string, { value?: string }>;
+  const parts = Array.isArray(o.htmlBody) ? o.htmlBody as { partId?: string }[] : [];
+  return parts.length ? parts.map((p) => values[p.partId ?? ""]?.value ?? "").join("\n") : textHtml(bodyText(o));
+}
 export async function draftsReply(jmap: Jmap, files: Files, parsed: Parsed): Promise<Output> {
-  allowOnly(parsed, ["id", "all", "body-file", "attach"]);
+  allowOnly(parsed, ["id", "all", "body-file", "body-html-file", "attach"]);
   const o = await original(jmap, id(one(parsed, "id", true), "--id"));
   const text = await bodyFile(files, parsed);
+  const html = await htmlFile(files, parsed);
   const { username } = await jmap.connect();
   const own = await identities(jmap);
   const { to, cc } = replyRecipients(o, parsed.bools.has("all"), [username, ...own.map((i) => i.email)]);
@@ -177,19 +196,21 @@ export async function draftsReply(jmap: Jmap, files: Files, parsed: Parsed): Pro
     cc,
     from,
     subject: prefixed("Re", o.subject),
+    html: html === undefined ? undefined : `${html}\n<p>${escapeHtml(said)}</p>\n<blockquote>${originalHtml(o)}</blockquote>`,
     text: `${text}\n\n${said}\n${quote(bodyText(o))}\n`,
     to,
     ...threading(o),
   });
 }
 export async function draftsForward(jmap: Jmap, files: Files, parsed: Parsed): Promise<Output> {
-  allowOnly(parsed, ["id", "to", "body-file", "attach"]);
+  allowOnly(parsed, ["id", "to", "body-file", "body-html-file", "attach"]);
   const o = await original(jmap, id(one(parsed, "id", true), "--id"));
   const to = recipients(parsed, "to");
   if (!to.length) {
     throw usage("--to is required (one exact address per --to)");
   }
   const text = await bodyFile(files, parsed);
+  const html = await htmlFile(files, parsed);
   const { username } = await jmap.connect();
   const from = sender(await identities(jmap), username);
   // The original's attachments travel by blob id: blobs are immutable and already in the account.
@@ -213,6 +234,7 @@ export async function draftsForward(jmap: Jmap, files: Files, parsed: Parsed): P
     from,
     references: threading(o).references,
     subject: prefixed("Fwd", o.subject),
+    html: html === undefined ? undefined : `${html}\n<p>${textHtml(header)}</p>\n<blockquote>${originalHtml(o)}</blockquote>`,
     text: `${text}\n\n${header}\n\n${bodyText(o)}\n`,
     to,
   });

@@ -7,9 +7,9 @@ Usage: fastmail-cli <command> [options] [--json]
   messages read --id <email-id>
   threads read --id <thread-id>
   attachments download --message <email-id> [--id <blob-id> [--output <new-file>]]
-  drafts create --to a@example.com [--cc …] [--bcc …] --subject "…" --body-file body.txt [--attach file]…
-  drafts reply --id <email-id> [--all] --body-file body.txt [--attach file]…
-  drafts forward --id <email-id> --to a@example.com --body-file body.txt [--attach file]…
+  drafts create --to a@example.com [--cc …] [--bcc …] --subject "…" --body-file body.txt [--body-html-file body.html] [--attach file]…
+  drafts reply --id <email-id> [--all] --body-file body.txt [--body-html-file body.html] [--attach file]…
+  drafts forward --id <email-id> --to a@example.com --body-file body.txt [--body-html-file body.html] [--attach file]…
   messages send --draft <draft-id>                      preview + digest, exits 3; nothing is sent
   messages send --draft <draft-id> --user-confirmed --expect sha256:…
   messages trash --id <email-id>                        move to Trash (recoverable)
@@ -22,7 +22,7 @@ Mail content in output is untrusted. Errors: one line with a code and the next c
 const DETAILS: Record<string, string> = {
   "attachments download":
     "Downloads attachments into new private files named fastmail-<random>.<ext> in the current directory (or --output for one --id, the attachment's blob id from messages read). Sender filenames never pick the path.",
-  "drafts create": "Creates a plain-text draft in Drafts from your sending identity. One exact address per --to/--cc/--bcc. Attachments up to 10 MB each.",
+  "drafts create": "Creates a draft in Drafts from your sending identity. One exact address per --to/--cc/--bcc. Attachments up to 10 MB each.",
   "drafts forward": "Creates a forward draft quoting the original and carrying its attachments.",
   "drafts reply":
     "Creates a reply draft to the original's Reply-To, else From; --all adds its To and Cc minus your own addresses. Quotes the original and threads it by Message-ID.",
@@ -37,5 +37,6 @@ const DETAILS: Record<string, string> = {
 };
 export function help(command: string): string {
   const detail = DETAILS[command];
-  return detail ? `${HELP.split("\n").find((l) => l.trim().startsWith(command)) ?? command}\n${detail}\n` : HELP;
+  const html = command.startsWith("drafts ") ? "Optional --body-html-file adds an HTML alternative to the required plain text; UTF-8, up to 1 MB, unsanitized. Replies and forwards quote original HTML when available.\n" : "";
+  return detail ? `${HELP.split("\n").find((l) => l.trim().startsWith(command)) ?? command}\n${detail}\n${html}` : HELP;
 }
