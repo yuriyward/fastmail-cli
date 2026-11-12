@@ -453,7 +453,7 @@ describe("split batches", () => {
     expect(JSON.parse(r.stderr).error.code).toBe("refused");
     expect(writes(f)).toEqual([]);
   });
-  test("create-split consumes actual mail-tracker compose output and fixes every common header, including Date", async () => {
+  for (const layout of ["nested", "flat"] as const) test(`create-split consumes actual compose output in ${layout} layout and fixes common headers, including Date`, async () => {
     const dir = join(import.meta.dir, "fixtures", "compose-per-recipient");
     const receipt = JSON.parse(await readFile(join(dir, "receipt.json"), "utf8"));
     expect(receipt.recipients).toBeUndefined();
@@ -463,8 +463,20 @@ describe("split batches", () => {
       submitted = a.create as typeof submitted;
       return ["Email/set", {created: Object.fromEntries(Object.keys(submitted).map(k => [k, {id: `new-${k}`}]))}, c[2]];
     }});
+    // Flatten the producer's real bytes without changing receipt indices or bodies.
+    const flatFiles = new Map<string, Uint8Array>([["receipt.json", await readFile(join(dir, "receipt.json"))]]);
+    for (const [name, source] of [["self", "self"], ...receipt.items.map((item: {i: number}) => [`recipient-${item.i}`, `recipients/${item.i}`])]) {
+      for (const ext of ["txt", "html"]) flatFiles.set(`${name}.body.${ext}`, await readFile(join(dir, source, `body.${ext}`)));
+    }
+    const inputRead = layout === "nested" ? readFile : async (path: string) => {
+      // Model ward-access's input namespace: no nested paths are available at all.
+      expect(path).not.toContain("/");
+      const value = flatFiles.get(path);
+      if (!value) throw Object.assign(new Error(`missing ${path}`), {code: "ENOENT"});
+      return value;
+    };
     const before = Date.now() - 1000;
-    const r = await run(["drafts", "create-split", "--dir", dir, "--to", ...receipt.to, "--cc", ...receipt.cc, "--bcc", ...receipt.bcc, "--subject", receipt.subject, "--attach", join(dir, "self", "body.txt"), "--json"], {...f.deps, readFile});
+    const r = await run(["drafts", "create-split", "--dir", layout === "flat" ? "." : dir, "--to", ...receipt.to, "--cc", ...receipt.cc, "--bcc", ...receipt.bcc, "--subject", receipt.subject, "--attach", layout === "flat" ? "self.body.txt" : join(dir, "self", "body.txt"), "--json"], {...f.deps, readFile: inputRead});
     expect(r.exitCode).toBe(0);
     const batch = JSON.parse(r.stdout).batch;
     const self = submitted.self!;
@@ -487,6 +499,24 @@ describe("split batches", () => {
       expect(copy.bodyValues).toEqual({text: {value: await readFile(join(dir, "recipients", String(item.i), "body.txt"), "utf8")}, html: {value: html}});
     }
     expect(f.calls.filter(c => c.url.pathname.startsWith("/jmap/upload/"))).toHaveLength(1);
+  });
+  test("flat layout failures never fall back to nested files or perform writes", async () => {
+    for (const [missing, code] of [["self.body.txt", "EACCES"], ["self.body.html", "ENOENT"], ["recipient-0.body.txt", "ENOENT"]]) {
+      const f = fake();
+      const reads: string[] = [];
+      const r = await run(["drafts", "create-split", "--dir", ".", "--to", "bob@example.org", "--subject", "Hi", "--json"], {
+        ...f.deps,
+        readFile: async (path: string) => {
+          reads.push(path);
+          if (path === missing) throw Object.assign(new Error(`cannot read ${path}`), {code});
+          return new TextEncoder().encode(path === "receipt.json" ? JSON.stringify({items: [{i: 0, address: "bob@example.org"}]}) : "body");
+        },
+      });
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toContain(`cannot read ${missing}`);
+      expect(reads.every(path => !path.includes("/"))).toBe(true);
+      expect(f.calls).toHaveLength(0);
+    }
   });
   test("create-split refuses missing items, invalid indices and duplicate mappings before writes", async () => {
     for (const receipt of [
@@ -518,7 +548,7 @@ describe("split batches", () => {
       "compose/recipients/2/body.txt": "bob text", "compose/recipients/2/body.html": "<p>bob</p>",
       "compose/self/body.txt": "self text", "compose/self/body.html": "<p>self</p>", "file.txt": "attached",
     }));
-    const deps = {...f.deps, readFile: async (p: string) => {const v = inputs.get(p); if (v === undefined) throw new Error(`missing ${p}`); return new TextEncoder().encode(v);}};
+    const deps = {...f.deps, readFile: async (p: string) => {const v = inputs.get(p); if (v === undefined) throw Object.assign(new Error(`missing ${p}`), {code: "ENOENT"}); return new TextEncoder().encode(v);}};
     const r = await run(["drafts", "create-split", "--dir", "compose", "--to", "bob@example.org", "--bcc", "blind@example.org", "--subject", "Hello", "--attach", "file.txt", "--json"], deps);
     expect(r.exitCode).toBe(0);
     const createdBatch = JSON.parse(r.stdout).batch;

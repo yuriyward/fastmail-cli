@@ -66,16 +66,33 @@ export async function draftsCreateSplit(jmap: Jmap, files: Files, parsed: Parsed
   if (mapping.size !== destinations.length || new Set(mapping.values()).size !== mapping.size || destinations.some(a => ![...mapping.values()].includes(a))) {
     throw usage("Receipt recipients must match To/Cc/Bcc exactly, case-insensitively");
   }
-  const readBody = async (path: string) => {
-    const text = await files.read(join(path, "body.txt"));
-    const html = await files.read(join(path, "body.html"));
+  // Probe the flat layout first so ward-access only needs flat input filenames.
+  // Only a missing flat self text selects nested mode; never mix layouts or hide IO errors.
+  let flat = true;
+  let selfText: Uint8Array;
+  try {
+    selfText = await files.read(join(dir, "self.body.txt"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    flat = false;
+    selfText = await files.read(join(dir, "self", "body.txt"));
+  }
+  const readBody = async (name: string, text?: Uint8Array) => {
+    const path = (extension: string) => flat
+      ? join(dir, `${name}.body.${extension}`)
+      : join(dir, name, `body.${extension}`);
+    text ??= await files.read(path("txt"));
+    const html = await files.read(path("html"));
     if (text.length > 1024 * 1024 || html.length > 1024 * 1024) throw usage("Compose bodies must be at most 1 MB each");
     return { text: decode(text), html: decode(html) };
   };
   // Read and validate the entire local input before any upload or draft creation.
+  const selfBody = await readBody("self", selfText);
   const bodies = new Map<number, {text: string; html: string}>();
-  for (const [i, email] of mapping) bodies.set(destinations.indexOf(email), await readBody(join(dir, "recipients", String(i))));
-  const selfBody = await readBody(join(dir, "self"));
+  for (const [i, email] of mapping) {
+    const name = flat ? `recipient-${i}` : join("recipients", String(i));
+    bodies.set(destinations.indexOf(email), await readBody(name));
+  }
   const { accountId, username } = await jmap.connect();
   const from = sender(await identities(jmap), username);
   const attachments = await uploads(jmap, files, parsed);

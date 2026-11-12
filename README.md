@@ -31,8 +31,27 @@ fastmail-cli messages send-split --batch <uuid>
 fastmail-cli messages send-split --batch <uuid> --user-confirmed --expect sha256:…
 ```
 
-Compose input is UTF-8: `self/{body.txt,body.html}` and
-`recipients/<i>/{body.txt,body.html}`, each body at most 1 MB.
+For ward-access, pass flat input names and use `drafts create-split --dir .`.
+Flatten the compose output without changing any file contents:
+
+| Compose file | Flat input name |
+| --- | --- |
+| `receipt.json` | `receipt.json` |
+| `self/body.html` | `self.body.html` |
+| `self/body.txt` | `self.body.txt` |
+| `recipients/<i>/body.html` | `recipient-<i>.body.html` |
+| `recipients/<i>/body.txt` | `recipient-<i>.body.txt` |
+
+All files belong directly in the directory passed to `--dir`. For example,
+ward-access inputs use `--input self.body.html=…`, rather than paths containing
+slashes. Pass attachment files with flat names too.
+
+The original nested compose layout remains supported for local use with
+`--dir <compose-out>` (including `--dir .` in that directory). The CLI selects
+flat mode when `self.body.txt` exists; only its absence selects nested mode.
+Once selected, the layout must be complete: missing or unreadable files fail
+before uploads or draft creation. If both layouts exist, flat mode takes precedence.
+Bodies must be UTF-8 and at most 1 MB each.
 `receipt.json` is mail-tracker’s per-recipient receipt:
 `{token, to:[], cc:[], bcc:[], items:[{i,address,imageToken,linkTokens,...}], ...}`.
 Each item’s nonnegative integer `i` selects its `recipients/<i>/` directory;
