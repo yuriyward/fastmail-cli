@@ -346,3 +346,152 @@ describe("trash, attachments and usage", () => {
     expect(f.calls.length).toBe(0);
   });
 });
+
+describe("split batches", () => {
+  const batch = "01234567-89ab-4cde-8fab-0123456789ab";
+  const keyword = `$ward-split-${batch}`;
+  const cc = [{email: "carol@example.org"}];
+  const bcc = [{email: "blind@example.org"}];
+  function splitFake(mode: "ok" | "partial" | "none" | "unknown" | "lost" | "move-fails" = "ok", mutate?: (draft: Record<string, unknown>) => void) {
+    const make = (id: string, marker: string, self = false): Record<string, unknown> => ({
+      ...DRAFT, id, blobId: `raw-${id}`, cc, ...(self ? {bcc} : {}),
+      sender: [{email: "owner@example.com"}], replyTo: [{email: "reply@example.com"}],
+      messageId: ["shared@example.com"],
+      keywords: {$draft: true, [keyword]: true, [marker]: true},
+    });
+    const drafts = [make("self", "$ward-split-self", true), ...[0,1,2].map(i => make(`r${i}`, `$ward-split-recipient-${i}`))];
+    if (mutate) mutate(drafts[1]!);
+    return fake({
+      "Email/query": (_a,c) => ["Email/query", {ids: drafts.map(d => d.id)}, c[2]],
+      "Email/get": (a,c) => ["Email/get", {list: drafts.filter(d => (a.ids as string[]).includes(String(d.id)))}, c[2]],
+      "EmailSubmission/set": (_a,c) => ["EmailSubmission/set", {
+        created: mode === "none" ? {} : {r0: {id: "s0"}, ...(mode === "partial" || mode === "unknown" ? {} : {r1: {id: "s1"}, r2: {id: "s2"}})},
+        notCreated: mode === "none" ? {r0: {type: "forbidden"}, r1: {type: "forbidden"}, r2: {type: "forbidden"}} : mode === "partial" ? {r1: {type: "forbidden"}, r2: {type: "forbidden"}} : {},
+      }, c[2]],
+      "Email/set": (_a,c) => ["Email/set", mode === "move-fails" ? {notUpdated: {self: {type: "forbidden"}}} : {updated: {self: null}}, c[2]],
+    }, {lost: mode === "lost"});
+  }
+  const args = ["messages", "send-split", "--batch", batch, "--json"];
+  const writes = (f: ReturnType<typeof fake>) => f.api().flatMap(a => a.methodCalls).filter(c => c[0].endsWith("/set"));
+  async function approve(f: ReturnType<typeof fake>) {
+    const p = await run(args, f.deps);
+    expect(p.exitCode).toBe(3);
+    return JSON.parse(p.stdout).preview.digest as string;
+  }
+  test("preview shows self in full, recipients, sender, reply-to, attachment and count without writes", async () => {
+    const f = splitFake();
+    const p = await run(args, f.deps);
+    expect(p.exitCode).toBe(3);
+    expect(JSON.parse(p.stdout).preview).toMatchObject({copies: 3, bcc, cc, sender: [{email: "owner@example.com"}], replyTo: [{email: "reply@example.com"}], parts: [{value: "hello"}, {type: "image/png"}]});
+    expect(writes(f)).toEqual([]);
+  });
+  test("confirmed envelopes and cleanup references are exact, self move is a separate request", async () => {
+    const f = splitFake();
+    const digest = await approve(f);
+    const r = await run([...args, "--user-confirmed", "--expect", digest], f.deps);
+    expect(r.exitCode).toBe(0);
+    const [send,move] = writes(f);
+    expect(send?.[1]).toEqual({accountId: "u1", create: Object.fromEntries(["bob@example.org", "carol@example.org", "blind@example.org"].map((email,i) => [`r${i}`, {emailId: `r${i}`, identityId: "id1", envelope: {mailFrom: {email: "owner@example.com", parameters: null}, rcptTo: [{email, parameters: null}]}}])), onSuccessDestroyEmail: ["#r0", "#r1", "#r2"]});
+    expect(move?.[1]).toEqual({accountId: "u1", update: {self: {"mailboxIds/mb-dr": null, "mailboxIds/mb-se": true, "keywords/$draft": null}}});
+    expect(f.api().filter(a => a.methodCalls.some(c => c[0].endsWith("/set"))).every(a => a.methodCalls.length === 1)).toBe(true);
+  });
+  for (const mode of ["partial", "none", "unknown", "lost", "move-fails"] as const) test(`submission outcomes: ${mode}`, async () => {
+    const f = splitFake(mode);
+    const digest = await approve(f);
+    const r = await run([...args, "--user-confirmed", "--expect", digest], f.deps);
+    const writeCalls = writes(f);
+    expect(writeCalls.filter(c => c[0] === "EmailSubmission/set")).toHaveLength(1);
+    if (mode === "partial") {
+      expect(JSON.parse(r.stdout)).toMatchObject({accepted: 1, outcomes: [{outcome: "accepted"}, {outcome: "rejected"}, {outcome: "rejected"}]});
+      expect(writeCalls[1]?.[1]).toMatchObject({update: {self: {"keywords/$ward-partial": true}}});
+    } else if (mode === "move-fails") expect(JSON.parse(r.stdout).warning).toContain("not moved");
+    else {
+      expect(writeCalls).toHaveLength(1);
+      expect(JSON.parse(r.stderr).error.code).toBe(mode === "none" ? "send_rejected" : "outcome_unknown");
+    }
+  });
+  test("changed digest, mismatched headers, duplicate routing and recipient Bcc refuse", async () => {
+    const f = splitFake();
+    const r = await run([...args, "--user-confirmed", "--expect", "sha256:wrong"], f.deps);
+    expect(JSON.parse(r.stderr).error.code).toBe("content_changed");
+    expect(writes(f)).toEqual([]);
+    for (const mutate of [
+      (d: Record<string, unknown>) => {d.replyTo = [{email: "other@example.org"}];},
+      (d: Record<string, unknown>) => {d.bcc = bcc;},
+      (d: Record<string, unknown>) => {d.keywords = {$draft: true, [keyword]: true, "$ward-split-recipient-1": true};},
+    ]) {
+      const bad = splitFake("ok", mutate);
+      expect(JSON.parse((await run(args, bad.deps)).stderr).error.code).toBe("invalid_batch");
+      expect(writes(bad)).toEqual([]);
+    }
+  });
+  test("incomplete recipient text refuses preview and malformed write responses stay unknown", async () => {
+    const f = splitFake("ok", d => {d.bodyValues = {"1": {value: "cut", isTruncated: true}};});
+    expect(JSON.parse((await run(args, f.deps)).stderr).error.code).toBe("preview_incomplete");
+    expect(writes(f)).toEqual([]);
+    for (const body of [{methodResponses: []}, {unexpected: true}]) {
+      const g = splitFake();
+      const digest = await approve(g);
+      let submissions = 0;
+      const deps = {...g.deps, fetch: async (url: string, init: RequestInit) => {
+        const calls = init.method === "POST" && typeof init.body === "string" ? JSON.parse(init.body).methodCalls as Call[] : [];
+        if (calls.some(c => c[0] === "EmailSubmission/set")) {submissions++; return Response.json(body);}
+        return g.deps.fetch(url, init);
+      }};
+      const r = await run([...args, "--user-confirmed", "--expect", digest], deps);
+      expect(JSON.parse(r.stderr).error.code).toBe("outcome_unknown");
+      expect(submissions).toBe(1);
+      expect(writes(g)).toEqual([]);
+    }
+  });
+  test("ordinary send refuses stranded split drafts", async () => {
+    const f = splitFake();
+    const r = await run(["messages", "send", "--draft", "r0", "--json"], f.deps);
+    expect(JSON.parse(r.stderr).error.code).toBe("refused");
+    expect(writes(f)).toEqual([]);
+  });
+  test("create reads receipt mapping, shares headers and attachment uploads, omits recipient Bcc", async () => {
+    let submitted: Record<string, Record<string, unknown>> = {};
+    const f = fake({"Email/set": (a,c) => {
+      submitted = a.create as typeof submitted;
+      return ["Email/set", {created: Object.fromEntries(Object.keys(submitted).map(k => [k, {id: `new-${k}`}]))}, c[2]];
+    }});
+    const inputs = new Map(Object.entries({
+      "compose/receipt.json": JSON.stringify({recipients: {"4": "BLIND@example.org", "2": "bob@example.org"}}),
+      "compose/recipients/4/body.txt": "blind text", "compose/recipients/4/body.html": "<p>blind</p>",
+      "compose/recipients/2/body.txt": "bob text", "compose/recipients/2/body.html": "<p>bob</p>",
+      "compose/self/body.txt": "self text", "compose/self/body.html": "<p>self</p>", "file.txt": "attached",
+    }));
+    const deps = {...f.deps, readFile: async (p: string) => {const v = inputs.get(p); if (v === undefined) throw new Error(`missing ${p}`); return new TextEncoder().encode(v);}};
+    const r = await run(["drafts", "create-split", "--dir", "compose", "--to", "bob@example.org", "--bcc", "blind@example.org", "--subject", "Hello", "--attach", "file.txt", "--json"], deps);
+    expect(r.exitCode).toBe(0);
+    const createdBatch = JSON.parse(r.stdout).batch;
+    expect(Object.keys(submitted)).toHaveLength(3);
+    expect(submitted.r0?.bcc).toBeUndefined();
+    expect(submitted.r1?.bcc).toBeUndefined();
+    expect(submitted.self?.bcc).toEqual([{email: "blind@example.org"}]);
+    for (const d of Object.values(submitted)) {
+      for (const field of ["from", "sender", "replyTo", "to", "cc", "subject", "messageId", "inReplyTo", "references", "attachments"]) expect(d[field]).toEqual(submitted.self?.[field]);
+      expect(d.keywords).toMatchObject({[`$ward-split-${createdBatch}`]: true});
+      expect(Object.keys(d).some(k => k.toLowerCase().includes("x-ward"))).toBe(false);
+    }
+    expect(submitted.r0?.bodyValues).toMatchObject({text: {value: "bob text"}});
+    expect(f.calls.filter(c => c.url.pathname.startsWith("/jmap/upload/"))).toHaveLength(1);
+    inputs.set("compose/receipt.json", JSON.stringify({recipients: {"0": "extra@example.org"}}));
+    const before = writes(f).length;
+    const bad = await run(["drafts", "create-split", "--dir", "compose", "--to", "bob@example.org", "--subject", "Hi", "--json"], deps);
+    expect(bad.exitCode).toBe(2);
+    expect(writes(f)).toHaveLength(before);
+  });
+});
+
+test("batch digest uses the versioned JCS contract and binds every manifest field", async () => {
+  const {batchDigest, jcs} = await import("../split.ts");
+  const manifest = {v: 1 as const, account: "a", identity: "i", mailFrom: "owner@example.com", self: {id: "s", blob: "abc"}, items: [{id: "z", blob: "def", rcptTo: "b@example.org"}, {id: "b", blob: "123", rcptTo: "c@example.org"}]};
+  const canonical = '{"account":"a","identity":"i","items":[{"blob":"123","id":"b","rcptTo":"c@example.org"},{"blob":"def","id":"z","rcptTo":"b@example.org"}],"mailFrom":"owner@example.com","self":{"blob":"abc","id":"s"},"v":1}';
+  const digest = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+  expect(batchDigest(manifest)).toBe(digest);
+  expect(batchDigest({...manifest, items: [...manifest.items].reverse()})).toBe(digest);
+  for (const change of [{account: "other"}, {identity: "other"}, {mailFrom: "other@example.com"}, {self: {id: "other", blob: "abc"}}, {self: {id: "s", blob: "other"}}, {items: [{id: "z", blob: "changed", rcptTo: "b@example.org"}]}]) expect(batchDigest({...manifest, ...change})).not.toBe(digest);
+  expect(jcs({"\u20ac": "€", a: "\n\"", n: 1e-7})).toBe('{"a":"\\n\\\"","n":1e-7,"€":"€"}');
+});

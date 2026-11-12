@@ -31,7 +31,7 @@ async function htmlFile(files: Files, parsed: Parsed): Promise<string | undefine
   if (bytes.length > 1024 * 1024) throw usage(`${path} is over 1 MB`);
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
-async function uploads(jmap: Jmap, files: Files, parsed: Parsed): Promise<Part[]> {
+export async function uploads(jmap: Jmap, files: Files, parsed: Parsed): Promise<Part[]> {
   const read: { path: string; bytes: Uint8Array }[] = [];
   for (const path of parsed.flags.get("attach") ?? []) {
     const bytes = await files.read(path);
@@ -48,13 +48,13 @@ async function uploads(jmap: Jmap, files: Files, parsed: Parsed): Promise<Part[]
   }
   return out;
 }
-async function identities(jmap: Jmap) {
+export async function identities(jmap: Jmap) {
   const { accountId } = await jmap.connect();
   const responses = await jmap.call([["Identity/get", { accountId, ids: null }, "i"]], [CORE, MAIL, SUBMISSION]);
   return (Jmap.take(responses, "i", "Identity/get").list ?? []) as { id: string; email: string; name?: string }[];
 }
 /** The identity sending from the session user's address, else the first one. */
-function sender(all: { email: string; name?: string }[], username: string, prefer: string[] = []): EmailAddress {
+export function sender(all: { email: string; name?: string }[], username: string, prefer: string[] = []): EmailAddress {
   const lower = (s: string) => s.toLowerCase();
   const found =
     all.find((i) => prefer.map(lower).includes(lower(i.email))) ?? all.find((i) => lower(i.email) === lower(username)) ?? all[0];

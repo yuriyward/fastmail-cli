@@ -8,10 +8,13 @@ Usage: fastmail-cli <command> [options] [--json]
   threads read --id <thread-id>
   attachments download --message <email-id> [--id <blob-id> [--output <new-file>]]
   drafts create --to a@example.com [--cc …] [--bcc …] --subject "…" --body-file body.txt [--body-html-file body.html] [--attach file]…
+  drafts create-split --dir <compose-out> --to a@example.com [--cc …] [--bcc …] --subject "…" [--attach file]…
   drafts reply --id <email-id> [--all] --body-file body.txt [--body-html-file body.html] [--attach file]…
   drafts forward --id <email-id> --to a@example.com --body-file body.txt [--body-html-file body.html] [--attach file]…
   messages send --draft <draft-id>                      preview + digest, exits 3; nothing is sent
   messages send --draft <draft-id> --user-confirmed --expect sha256:…
+  messages send-split --batch <uuid>                    preview + batch digest, exits 3
+  messages send-split --batch <uuid> --user-confirmed --expect sha256:…
   messages trash --id <email-id>                        move to Trash (recoverable)
 
 Sending needs the owner's approval of the whole preview for that exact draft; never infer it.
@@ -23,6 +26,8 @@ const DETAILS: Record<string, string> = {
   "attachments download":
     "Downloads attachments into new private files named fastmail-<random>.<ext> in the current directory (or --output for one --id, the attachment's blob id from messages read). Sender filenames never pick the path.",
   "drafts create": "Creates a draft in Drafts from your sending identity. One exact address per --to/--cc/--bcc. Attachments up to 10 MB each.",
+  "drafts create-split": "Reads compose --per-recipient output: receipt.json recipients maps indices to addresses; recipients/<i>/ and self/ each contain body.txt and body.html. Creates recipient drafts plus one self draft. One exact, distinct address per flag; attachments up to 10 MB. Prints the batch UUID.",
+  "messages send-split": "Preview shows all recipients, Sender/Reply-To, every self MIME part in full, copy count and a digest binding all raw blobs, draft IDs, routing, identity and account. Confirmation submits once with one envelope recipient per copy, destroys accepted recipient drafts, then files the self copy in Sent only for known outcomes with at least one acceptance. Partial batches are tagged $ward-partial. Never retries; trash stranded drafts with messages trash. Requires ward-access split verification and policy support.",
   "drafts forward": "Creates a forward draft quoting the original and carrying its attachments.",
   "drafts reply":
     "Creates a reply draft to the original's Reply-To, else From; --all adds its To and Cc minus your own addresses. Quotes the original and threads it by Message-ID.",
@@ -37,6 +42,6 @@ const DETAILS: Record<string, string> = {
 };
 export function help(command: string): string {
   const detail = DETAILS[command];
-  const html = command.startsWith("drafts ") ? "Optional --body-html-file adds an HTML alternative to the required plain text; UTF-8, up to 1 MB, unsanitized. Replies and forwards quote original HTML when available.\n" : "";
+  const html = command.startsWith("drafts ") && command !== "drafts create-split" ? "Optional --body-html-file adds an HTML alternative to the required plain text; UTF-8, up to 1 MB, unsanitized. Replies and forwards quote original HTML when available.\n" : "";
   return detail ? `${HELP.split("\n").find((l) => l.trim().startsWith(command)) ?? command}\n${detail}\n${html}` : HELP;
 }

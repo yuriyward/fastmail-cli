@@ -8,6 +8,7 @@ import { CliError } from "./errors.ts";
 import { type Fetch, Jmap } from "./jmap.ts";
 import { HELP, help } from "./help.ts";
 import { foldersList, messagesList, messagesRead, messagesSearch, messagesTrash, type Output, threadsRead, unknownCommand } from "./mail.ts";
+import { draftsCreateSplit, messagesSendSplit } from "./split.ts";
 import { messagesSend } from "./send.ts";
 
 export const SCHEMA_VERSION = 1;
@@ -47,6 +48,8 @@ async function dispatch(argv: string[], deps: Deps): Promise<Output> {
   const token = deps.env.FASTMAIL_ACCESS_TOKEN;
   const commands: Record<string, (jmap: Jmap) => Promise<Output>> = {
     "attachments download": (j) => attachmentsDownload(j, { create: deps.createFile }, parsed),
+    "drafts create-split": (j) => draftsCreateSplit(j, { read: deps.readFile }, parsed),
+    "messages send-split": (j) => messagesSendSplit(j, parsed),
     "drafts create": (j) => draftsCreate(j, { read: deps.readFile }, parsed),
     "drafts forward": (j) => draftsForward(j, { read: deps.readFile }, parsed),
     "drafts reply": (j) => draftsReply(j, { read: deps.readFile }, parsed),

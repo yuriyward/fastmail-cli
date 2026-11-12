@@ -4,7 +4,7 @@ import { CliError } from "./errors.ts";
 import { CORE, Jmap, MAIL, mailboxes, SUBMISSION } from "./jmap.ts";
 import { list, type Output } from "./mail.ts";
 
-const FIELDS = ["id", "blobId", "size", "mailboxIds", "keywords", "from", "sender", "replyTo", "to", "cc", "bcc", "subject", "inReplyTo", "references", "bodyStructure", "bodyValues"];
+const FIELDS = ["id", "blobId", "size", "mailboxIds", "keywords", "from", "sender", "replyTo", "to", "cc", "bcc", "subject", "messageId", "inReplyTo", "references", "bodyStructure", "bodyValues"];
 const PART_FIELDS = ["partId", "blobId", "size", "name", "type", "charset", "disposition", "cid", "location", "subParts"];
 interface Part {
   partId?: string | null;
@@ -30,7 +30,7 @@ export function leaves(part: Part | null | undefined): Part[] {
 export const blobDigest = (bytes: Uint8Array) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 /** The stored draft, its digest and a preview that shows every leaf part and every text value in full. */
-async function stored(jmap: Jmap, draft: string) {
+export async function stored(jmap: Jmap, draft: string) {
   const { accountId } = await jmap.connect();
   const boxes = await mailboxes(jmap);
   const responses = await jmap.call([
@@ -61,7 +61,7 @@ async function stored(jmap: Jmap, draft: string) {
   });
   return { boxes, digest, m, parts };
 }
-function preview(m: Record<string, unknown>, parts: Awaited<ReturnType<typeof stored>>["parts"], digest: string) {
+export function preview(m: Record<string, unknown>, parts: Awaited<ReturnType<typeof stored>>["parts"], digest: string) {
   const headers = { bcc: m.bcc ?? null, cc: m.cc ?? null, from: m.from ?? null, inReplyTo: m.inReplyTo ?? null, references: m.references ?? null, replyTo: m.replyTo ?? null, sender: m.sender ?? null, subject: m.subject ?? null, to: m.to ?? null };
   return {
     json: { ...headers, digest, parts, size: m.size ?? null },
@@ -87,6 +87,9 @@ export async function messagesSend(jmap: Jmap, parsed: Parsed): Promise<Output> 
   allowOnly(parsed, ["draft", "user-confirmed", "expect"]);
   const draft = id(one(parsed, "draft", true), "--draft");
   const { m, digest, parts, boxes } = await stored(jmap, draft);
+  if (Object.keys((m.keywords ?? {}) as object).some(k => k === "$ward-split" || k.startsWith("$ward-split-"))) {
+    throw new CliError("refused", "Split drafts must use messages send-split; trash stranded drafts instead");
+  }
   const confirm = `fastmail-cli messages send --draft ${draft} --user-confirmed --expect ${digest}`;
   if (!parsed.bools.has("user-confirmed")) {
     const shown = preview(m, parts, digest);

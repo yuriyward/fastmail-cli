@@ -120,7 +120,7 @@ export class Jmap {
       throw failure(response.status, body);
     }
     if (!Array.isArray(body?.methodResponses)) {
-      throw new CliError("jmap_error", "JMAP response has no methodResponses");
+      throw new CliError(isWrite(calls) ? "outcome_unknown" : "jmap_error", "JMAP response has no methodResponses", {details: {dispatched: isWrite(calls)}});
     }
     const out = new Map<string, [string, Record<string, unknown>][]>();
     for (const entry of body.methodResponses as [string, Record<string, unknown>, string][]) {
