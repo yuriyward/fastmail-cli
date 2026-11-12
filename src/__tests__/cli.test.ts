@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { replyRecipients } from "../drafts.ts";
 import { run } from "../main.ts";
 import { leaves } from "../send.ts";
@@ -417,6 +419,7 @@ describe("split batches", () => {
     expect(writes(f)).toEqual([]);
     for (const mutate of [
       (d: Record<string, unknown>) => {d.replyTo = [{email: "other@example.org"}];},
+      (d: Record<string, unknown>) => {d.sentAt = "2026-11-12T00:00:00Z";},
       (d: Record<string, unknown>) => {d.bcc = bcc;},
       (d: Record<string, unknown>) => {d.keywords = {$draft: true, [keyword]: true, "$ward-split-recipient-1": true};},
     ]) {
@@ -450,6 +453,59 @@ describe("split batches", () => {
     expect(JSON.parse(r.stderr).error.code).toBe("refused");
     expect(writes(f)).toEqual([]);
   });
+  test("create-split consumes actual mail-tracker compose output and fixes every common header, including Date", async () => {
+    const dir = join(import.meta.dir, "fixtures", "compose-per-recipient");
+    const receipt = JSON.parse(await readFile(join(dir, "receipt.json"), "utf8"));
+    expect(receipt.recipients).toBeUndefined();
+    expect(receipt.items).toHaveLength(3);
+    let submitted: Record<string, Record<string, unknown>> = {};
+    const f = fake({"Email/set": (a,c) => {
+      submitted = a.create as typeof submitted;
+      return ["Email/set", {created: Object.fromEntries(Object.keys(submitted).map(k => [k, {id: `new-${k}`}]))}, c[2]];
+    }});
+    const before = Date.now() - 1000;
+    const r = await run(["drafts", "create-split", "--dir", dir, "--to", ...receipt.to, "--cc", ...receipt.cc, "--bcc", ...receipt.bcc, "--subject", receipt.subject, "--attach", join(dir, "self", "body.txt"), "--json"], {...f.deps, readFile});
+    expect(r.exitCode).toBe(0);
+    const batch = JSON.parse(r.stdout).batch;
+    const self = submitted.self!;
+    expect(Object.keys(submitted)).toHaveLength(4);
+    expect(self.sentAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(Date.parse(String(self.sentAt))).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(String(self.sentAt))).toBeLessThanOrEqual(Date.now());
+    const common = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([key]) => !["bcc", "keywords", "bodyValues"].includes(key)));
+    for (const d of Object.values(submitted)) expect(common(d)).toEqual(common(self));
+    expect(self.keywords).toMatchObject({"$ward-split-self": true, [`$ward-split-${batch}`]: true});
+    expect(self.bcc).toEqual([{email: "blind@example.org"}]);
+    expect(self.bodyValues).toEqual({text: {value: await readFile(join(dir, "self", "body.txt"), "utf8")}, html: {value: await readFile(join(dir, "self", "body.html"), "utf8")}});
+    for (const item of receipt.items) {
+      const copy = submitted[`r${item.i}`]!;
+      expect(copy.bcc).toBeUndefined();
+      expect(copy.keywords).toMatchObject({[`$ward-split-recipient-${item.i}`]: true, [`$ward-split-${batch}`]: true});
+      const html = await readFile(join(dir, "recipients", String(item.i), "body.html"), "utf8");
+      expect(html).toContain(item.imageToken);
+      expect(html).toContain(item.linkTokens[0]);
+      expect(copy.bodyValues).toEqual({text: {value: await readFile(join(dir, "recipients", String(item.i), "body.txt"), "utf8")}, html: {value: html}});
+    }
+    expect(f.calls.filter(c => c.url.pathname.startsWith("/jmap/upload/"))).toHaveLength(1);
+  });
+  test("create-split refuses missing items, invalid indices and duplicate mappings before writes", async () => {
+    for (const receipt of [
+      {recipients: {"0": "bob@example.org"}},
+      {items: [null]},
+      {items: [{i: "0", address: "bob@example.org"}]},
+      {items: [{i: -1, address: "bob@example.org"}]},
+      {items: [{i: 0.5, address: "bob@example.org"}]},
+      {items: [{i: "../self", address: "bob@example.org"}]},
+      {items: [{i: 0, address: "bob@example.org"}, {i: 0, address: "carol@example.org"}]},
+      {items: [{i: 0, address: "bob@example.org"}, {i: 1, address: "BOB@example.org"}]},
+    ]) {
+      const f = fake();
+      const deps = {...f.deps, readFile: async () => new TextEncoder().encode(JSON.stringify(receipt))};
+      const r = await run(["drafts", "create-split", "--dir", "compose", "--to", "bob@example.org", "--subject", "Hi", "--json"], deps);
+      expect(r.exitCode).toBe(2);
+      expect(f.calls).toHaveLength(0);
+    }
+  });
   test("create reads receipt mapping, shares headers and attachment uploads, omits recipient Bcc", async () => {
     let submitted: Record<string, Record<string, unknown>> = {};
     const f = fake({"Email/set": (a,c) => {
@@ -457,7 +513,7 @@ describe("split batches", () => {
       return ["Email/set", {created: Object.fromEntries(Object.keys(submitted).map(k => [k, {id: `new-${k}`}]))}, c[2]];
     }});
     const inputs = new Map(Object.entries({
-      "compose/receipt.json": JSON.stringify({recipients: {"4": "BLIND@example.org", "2": "bob@example.org"}}),
+      "compose/receipt.json": JSON.stringify({items: [{i: 4, address: "BLIND@example.org"}, {i: 2, address: "bob@example.org"}]}),
       "compose/recipients/4/body.txt": "blind text", "compose/recipients/4/body.html": "<p>blind</p>",
       "compose/recipients/2/body.txt": "bob text", "compose/recipients/2/body.html": "<p>bob</p>",
       "compose/self/body.txt": "self text", "compose/self/body.html": "<p>self</p>", "file.txt": "attached",
@@ -471,13 +527,13 @@ describe("split batches", () => {
     expect(submitted.r1?.bcc).toBeUndefined();
     expect(submitted.self?.bcc).toEqual([{email: "blind@example.org"}]);
     for (const d of Object.values(submitted)) {
-      for (const field of ["from", "sender", "replyTo", "to", "cc", "subject", "messageId", "inReplyTo", "references", "attachments"]) expect(d[field]).toEqual(submitted.self?.[field]);
+      for (const field of ["from", "sender", "replyTo", "to", "cc", "subject", "messageId", "sentAt", "inReplyTo", "references", "attachments"]) expect(d[field]).toEqual(submitted.self?.[field]);
       expect(d.keywords).toMatchObject({[`$ward-split-${createdBatch}`]: true});
       expect(Object.keys(d).some(k => k.toLowerCase().includes("x-ward"))).toBe(false);
     }
     expect(submitted.r0?.bodyValues).toMatchObject({text: {value: "bob text"}});
     expect(f.calls.filter(c => c.url.pathname.startsWith("/jmap/upload/"))).toHaveLength(1);
-    inputs.set("compose/receipt.json", JSON.stringify({recipients: {"0": "extra@example.org"}}));
+    inputs.set("compose/receipt.json", JSON.stringify({items: [{i: 0, address: "extra@example.org"}]}));
     const before = writes(f).length;
     const bad = await run(["drafts", "create-split", "--dir", "compose", "--to", "bob@example.org", "--subject", "Hi", "--json"], deps);
     expect(bad.exitCode).toBe(2);

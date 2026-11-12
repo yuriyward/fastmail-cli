@@ -26,7 +26,7 @@ const DETAILS: Record<string, string> = {
   "attachments download":
     "Downloads attachments into new private files named fastmail-<random>.<ext> in the current directory (or --output for one --id, the attachment's blob id from messages read). Sender filenames never pick the path.",
   "drafts create": "Creates a draft in Drafts from your sending identity. One exact address per --to/--cc/--bcc. Attachments up to 10 MB each.",
-  "drafts create-split": "Reads compose --per-recipient output: receipt.json recipients maps indices to addresses; recipients/<i>/ and self/ each contain body.txt and body.html. Creates recipient drafts plus one self draft. One exact, distinct address per flag; attachments up to 10 MB. Prints the batch UUID.",
+  "drafts create-split": "Reads compose --per-recipient output: receipt.json items map i to address; recipients/<i>/ and self/ each contain body.txt and body.html. Creates recipient drafts plus one self draft. One exact, distinct address per flag; attachments up to 10 MB. Prints the batch UUID.",
   "messages send-split": "Preview shows all recipients, Sender/Reply-To, every self MIME part in full, copy count and a digest binding all raw blobs, draft IDs, routing, identity and account. Confirmation submits once with one envelope recipient per copy, destroys accepted recipient drafts, then files the self copy in Sent only for known outcomes with at least one acceptance. Partial batches are tagged $ward-partial. Never retries; trash stranded drafts with messages trash. Requires ward-access split verification and policy support.",
   "drafts forward": "Creates a forward draft quoting the original and carrying its attachments.",
   "drafts reply":

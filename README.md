@@ -33,12 +33,14 @@ fastmail-cli messages send-split --batch <uuid> --user-confirmed --expect sha256
 
 Compose input is UTF-8: `self/{body.txt,body.html}` and
 `recipients/<i>/{body.txt,body.html}`, each body at most 1 MB.
-`receipt.json` has `recipients: {"0":"bob@example.org", ...}` (also accepted:
-an array of addresses or `{index,address}` objects). Indices select directories;
+`receipt.json` is mail-tracker’s per-recipient receipt:
+`{token, to:[], cc:[], bcc:[], items:[{i,address,imageToken,linkTokens,...}], ...}`.
+Each item’s nonnegative integer `i` selects its `recipients/<i>/` directory;
 addresses must match To/Cc/Bcc exactly, case-insensitively, with no duplicates.
-Extra receipt fields, such as the tracker message token, are ignored. Attachment
-blobs are uploaded once and shared by every draft. All copies share one Message-ID;
-only the self draft has Bcc. No `X-Ward-Split` header is created.
+Routing comes from `items[].address`; other receipt metadata, including tokens and
+recipient role arrays, is ignored. Attachment blobs are uploaded once and shared
+by every draft. All copies share one Message-ID and one Date (set once through
+JMAP `sentAt`); only the self draft has Bcc. No `X-Ward-Split` header is created.
 
 The preview exits 3 and shows the complete self body, every MIME leaf, all
 recipients, Sender/Reply-To, attachments, count and digest. Truncated or
@@ -57,7 +59,7 @@ Wire contract for the matching ward-access policy:
   and recipients. The single-draft send path refuses split keywords; tracker lookup
   for untagged personalised drafts belongs to ward-access.
 - Batch discovery uses paged `Email/query` with `hasKeyword`; `Email/get` includes
-  `messageId`, full body structure/values and the headers used by ordinary send.
+  `messageId`, `sentAt`, full body structure/values and the headers used by ordinary send.
 - The batch digest is `sha256:` plus SHA-256 of RFC 8785 JCS of
   `{"v":1,"account":accountId,"identity":identityId,"mailFrom":identityEmail,"self":{"id":selfId,"blob":rawSha256Hex},"items":[{"id":draftId,"blob":rawSha256Hex,"rcptTo":lowercaseAddress}]}`.
   Items sort by draft ID; hashes have no `sha256:` prefix inside the manifest.

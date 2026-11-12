@@ -1,0 +1,49 @@
+{
+  "bcc": [
+    "blind@example.org"
+  ],
+  "cc": [
+    "carol@example.org"
+  ],
+  "draftId": "<compose-e55138d1-4c7d-4292-af5c-9073140cbec2@mail-tracker.invalid>",
+  "items": [
+    {
+      "address": "bob@example.org",
+      "role": "to",
+      "i": 0,
+      "imageToken": "AAAAAAAAAAAAAAAAAAAAAA",
+      "linkTokens": [
+        "DDDDDDDDDDDDDDDDDDDDDD"
+      ]
+    },
+    {
+      "address": "carol@example.org",
+      "role": "cc",
+      "i": 1,
+      "imageToken": "BBBBBBBBBBBBBBBBBBBBBB",
+      "linkTokens": [
+        "EEEEEEEEEEEEEEEEEEEEEE"
+      ]
+    },
+    {
+      "address": "blind@example.org",
+      "role": "bcc",
+      "i": 2,
+      "imageToken": "CCCCCCCCCCCCCCCCCCCCCC",
+      "linkTokens": [
+        "FFFFFFFFFFFFFFFFFFFFFF"
+      ]
+    }
+  ],
+  "links": [
+    "https://example.org/guide"
+  ],
+  "mode": "per-recipient",
+  "status": "tracked",
+  "subject": "Compose contract fixture",
+  "to": [
+    "bob@example.org"
+  ],
+  "token": "MMMMMMMMMMMMMMMMMMMMMM",
+  "out": "src/__tests__/fixtures/compose-per-recipient"
+}

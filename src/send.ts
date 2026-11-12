@@ -4,7 +4,7 @@ import { CliError } from "./errors.ts";
 import { CORE, Jmap, MAIL, mailboxes, SUBMISSION } from "./jmap.ts";
 import { list, type Output } from "./mail.ts";
 
-const FIELDS = ["id", "blobId", "size", "mailboxIds", "keywords", "from", "sender", "replyTo", "to", "cc", "bcc", "subject", "messageId", "inReplyTo", "references", "bodyStructure", "bodyValues"];
+const FIELDS = ["id", "blobId", "size", "mailboxIds", "keywords", "from", "sender", "replyTo", "to", "cc", "bcc", "subject", "messageId", "sentAt", "inReplyTo", "references", "bodyStructure", "bodyValues"];
 const PART_FIELDS = ["partId", "blobId", "size", "name", "type", "charset", "disposition", "cid", "location", "subParts"];
 interface Part {
   partId?: string | null;

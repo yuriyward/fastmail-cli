@@ -37,20 +37,19 @@ export function batchDigest(manifest: BatchManifest): string {
   return blobDigest(new TextEncoder().encode(jcs({ ...manifest, items: [...manifest.items].sort((a,b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0) })));
 }
 
-/** Receipt contract: recipients is an index -> address map, or an array of {index, address}. */
+/** mail-tracker compose --per-recipient: items map directory indices to addresses. */
 function receiptMap(value: unknown): Map<number, string> {
-  if (!value || typeof value !== "object") throw usage("receipt.json must contain recipients");
-  const raw = (value as Record<string, unknown>).recipients;
-  if (!raw || typeof raw !== "object") throw usage("receipt.json must contain recipients");
-  const entries = Array.isArray(raw)
-    ? raw.map((v, i) => typeof v === "string" ? [String(i), v] : [String(v?.index ?? i), v?.address])
-    : Object.entries(raw);
+  const items = value && typeof value === "object" ? (value as Record<string, unknown>).items : undefined;
+  if (!Array.isArray(items)) throw usage("receipt.json must contain per-recipient items");
   const result = new Map<number, string>();
-  for (const [key, value] of entries) {
-    if (!/^(0|[1-9][0-9]*)$/.test(String(key)) || typeof value !== "string") throw usage("Invalid recipient mapping in receipt.json");
-    const index = Number(key);
-    if (!Number.isSafeInteger(index) || result.has(index)) throw usage("Duplicate or invalid receipt index");
-    result.set(index, address(value).toLowerCase());
+  for (const item of items) {
+    if (!item || typeof item !== "object") throw usage("Invalid recipient item in receipt.json");
+    const { i, address: email } = item as Record<string, unknown>;
+    if (typeof i !== "number" || !Number.isSafeInteger(i) || i < 0 || typeof email !== "string") {
+      throw usage("Receipt items require a nonnegative integer i and an address");
+    }
+    if (result.has(i)) throw usage("Duplicate receipt index");
+    result.set(i, address(email).toLowerCase());
   }
   return result;
 }
@@ -85,6 +84,8 @@ export async function draftsCreateSplit(jmap: Jmap, files: Files, parsed: Parsed
   const common = {
     attachments, from: [from], sender: null, replyTo: null, to, cc: cc.length ? cc : null, subject,
     messageId: [`${randomUUID()}@${from.email.split("@")[1]}`], inReplyTo: null, references: null,
+    // JMAP sentAt generates the RFC 5322 Date header; capture once for the whole batch.
+    sentAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     mailboxIds: { [drafts]: true },
     textBody: [{partId: "text", type: "text/plain"}], htmlBody: [{partId: "html", type: "text/html"}],
   };
@@ -133,7 +134,7 @@ export async function messagesSendSplit(jmap: Jmap, parsed: Parsed): Promise<Out
   for (const d of drafts) {
     const keywords = d.m.keywords as Record<string, unknown>;
     if (!keywords[keyword]) throw invalid("Batch keyword changed");
-    for (const field of ["from", "sender", "replyTo", "to", "cc", "subject", "messageId", "inReplyTo", "references"]) {
+    for (const field of ["from", "sender", "replyTo", "to", "cc", "subject", "messageId", "sentAt", "inReplyTo", "references"]) {
       if (jcs(d.m[field] ?? null) !== jcs(self.m[field] ?? null)) throw invalid(`Batch ${field} differs`);
     }
     if (d === self) continue;
